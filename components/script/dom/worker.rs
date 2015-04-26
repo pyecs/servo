@@ -9,11 +9,11 @@ use dom::bindings::codegen::InheritTypes::{EventCast, EventTargetCast};
 use dom::bindings::error::{Fallible, ErrorResult};
 use dom::bindings::error::Error::Syntax;
 use dom::bindings::global::{GlobalRef, GlobalField};
+use dom::bindings::js::Root;
 use dom::bindings::refcounted::Trusted;
 use dom::bindings::structuredclone::StructuredCloneData;
 use dom::bindings::trace::JSTraceable;
 use dom::bindings::utils::{Reflectable, reflect_dom_object};
-use dom::bindings::js::Root;
 use dom::window::WindowHelpers;
 use dom::dedicatedworkerglobalscope::DedicatedWorkerGlobalScope;
 use dom::errorevent::ErrorEvent;
@@ -26,15 +26,18 @@ use devtools_traits::{DevtoolsControlMsg, DevtoolsPageInfo};
 
 use util::str::DOMString;
 
-use js::jsapi::{JSContext, HandleValue, RootedValue};
+use js::jsapi::{JSContext, JSRuntime, HandleValue, RootedValue, JS_RequestInterruptCallback};
 use js::jsapi::{JSAutoRequest, JSAutoCompartment};
 use js::jsval::UndefinedValue;
 use url::UrlParser;
 
 use std::borrow::ToOwned;
 use std::sync::mpsc::{channel, Sender};
+use std::cell::Cell;
+use std::ptr;
 
 pub type TrustedWorkerAddress = Trusted<Worker>;
+
 
 // https://html.spec.whatwg.org/multipage/#worker
 #[dom_struct]
@@ -44,6 +47,8 @@ pub struct Worker {
     /// Sender to the Receiver associated with the DedicatedWorkerGlobalScope
     /// this Worker created.
     sender: Sender<(TrustedWorkerAddress, ScriptMsg)>,
+    closing: Cell<bool>,
+    rt: Cell<SharedRt>
 }
 
 impl Worker {
@@ -52,6 +57,8 @@ impl Worker {
             eventtarget: EventTarget::new_inherited(EventTargetTypeId::Worker),
             global: GlobalField::from_rooted(&global),
             sender: sender,
+            closing: Cell::new(false),
+            rt: Cell::new(SharedRt::null())
         }
     }
 
@@ -89,9 +96,18 @@ impl Worker {
             ).unwrap();
         }
 
+        // temporary channel to get a SharedRt from the worker task
+        let (rt_sender, rt_receiver) = channel();
+
         DedicatedWorkerGlobalScope::run_worker_scope(
             worker_url, global.pipeline(), global.mem_profiler_chan(), global.devtools_chan(),
-            worker_ref, resource_task, global.script_chan(), sender, receiver);
+            worker_ref, resource_task, global.script_chan(), sender, receiver, rt_sender.clone());
+
+        // block until the JSRuntime arrives
+        match rt_receiver.recv() {
+            Ok(shared_rt) => worker.r().set_rt(shared_rt),
+            Err(_) => panic!("Error receiving runtime from worker task")
+        };
 
         Ok(worker)
     }
@@ -99,6 +115,10 @@ impl Worker {
     pub fn handle_message(address: TrustedWorkerAddress,
                           data: StructuredCloneData) {
         let worker = address.root();
+
+        if worker.r().closing.get() {
+            return
+        }
 
         let global = worker.r().global.root();
         let target = EventTargetCast::from_ref(worker.r());
@@ -124,6 +144,11 @@ impl Worker {
     pub fn handle_error_message(address: TrustedWorkerAddress, message: DOMString,
                                 filename: DOMString, lineno: u32, colno: u32) {
         let worker = address.root();
+
+        if worker.r().closing.get() {
+            return
+        }
+
         let global = worker.r().global.root();
         let error = RootedValue::new(global.r().get_cx(), UndefinedValue());
         let target = EventTargetCast::from_ref(worker.r());
@@ -143,7 +168,44 @@ impl<'a> WorkerMethods for &'a Worker {
         Ok(())
     }
 
+
+    // https://html.spec.whatwg.org/multipage/#terminate-a-worker
+    #[allow(unsafe_code)]
+    fn Terminate(self) {
+        if self.closing.get() {
+            return;
+        }
+
+        self.closing.set(true);
+
+        let address = Trusted::new(self.global.root().r().get_cx(), self,
+                                   self.global.root().r().script_chan().clone());
+        self.sender.send((address, ScriptMsg::Terminate)).unwrap();
+
+        let rt = self.get_rt();
+        assert!(!rt.is_null());
+
+        unsafe {
+            JS_RequestInterruptCallback(rt.rt());
+        }
+    }
+
     event_handler!(message, GetOnmessage, SetOnmessage);
+}
+
+pub trait WorkerHelpers {
+    fn get_rt(self) -> SharedRt;
+    fn set_rt(self, rt: SharedRt);
+}
+
+impl<'a> WorkerHelpers for &'a Worker {
+    fn get_rt(self) -> SharedRt {
+        self.rt.get()
+    }
+
+    fn set_rt(self, rt: SharedRt) {
+        self.rt.set(rt);
+    }
 }
 
 pub struct WorkerMessageHandler {
@@ -212,4 +274,47 @@ impl Runnable for WorkerErrorHandler {
         let this = *self;
         Worker::handle_error_message(this.addr, this.msg, this.file_name, this.line_num, this.col_num);
     }
+}
+
+pub struct SharedRt {
+    ptr: *mut JSRuntime
+}
+
+impl SharedRt {
+    pub fn new(rt: *mut JSRuntime) -> SharedRt {
+        SharedRt {
+            ptr: rt
+        }
+    }
+
+    pub fn is_null(self) -> bool {
+        self.ptr.is_null()
+    }
+
+    pub fn rt(self) -> *mut JSRuntime {
+        self.ptr
+    }
+
+    pub fn null() -> SharedRt {
+        SharedRt {
+            ptr: ptr::null_mut()
+        }
+    }
+
+}
+
+impl JSTraceable for SharedRt {
+    fn trace(&self, _: *mut ::js::jsapi::JSTracer) {
+
+    }
+}
+
+impl Copy for SharedRt {}
+impl Clone for SharedRt {
+    fn clone(&self) -> SharedRt { *self }
+}
+
+#[allow(unsafe_code)]
+unsafe impl Send for SharedRt {
+
 }

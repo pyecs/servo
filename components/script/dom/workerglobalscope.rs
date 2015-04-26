@@ -45,6 +45,7 @@ pub enum WorkerGlobalScopeTypeId {
 pub struct WorkerGlobalScope {
     eventtarget: EventTarget,
     worker_url: Url,
+    closing: Cell<bool>,
     runtime: Rc<Runtime>,
     next_worker_id: Cell<WorkerId>,
     resource_task: ResourceTask,
@@ -68,6 +69,7 @@ impl WorkerGlobalScope {
             eventtarget: EventTarget::new_inherited(EventTargetTypeId::WorkerGlobalScope(type_id)),
             next_worker_id: Cell::new(WorkerId(0)),
             worker_url: worker_url,
+            closing: Cell::new(false),
             runtime: runtime,
             resource_task: resource_task,
             location: Default::default(),
@@ -111,6 +113,7 @@ impl WorkerGlobalScope {
         self.next_worker_id.set(WorkerId(id_num + 1));
         worker_id
     }
+
 }
 
 impl<'a> WorkerGlobalScopeMethods for &'a WorkerGlobalScope {
@@ -232,6 +235,9 @@ pub trait WorkerGlobalScopeHelpers {
     fn new_script_pair(self) -> (Box<ScriptChan+Send>, Box<ScriptPort+Send>);
     fn process_event(self, msg: ScriptMsg);
     fn get_cx(self) -> *mut JSContext;
+    fn get_closing(self) -> bool;
+    fn set_closing(self, closing: bool);
+    fn clear_timers(self);
 }
 
 impl<'a> WorkerGlobalScopeHelpers for &'a WorkerGlobalScope {
@@ -277,6 +283,20 @@ impl<'a> WorkerGlobalScopeHelpers for &'a WorkerGlobalScope {
 
     fn get_cx(self) -> *mut JSContext {
         self.runtime.cx()
+    }
+
+    // set_closing and get_closing should only be used from self and
+    // DedicatedWorkerGlobalScope.
+    fn get_closing(self) -> bool {
+        self.closing.get()
+    }
+
+    fn set_closing(self, closing: bool) {
+        self.closing.set(closing);
+    }
+
+    fn clear_timers(self) {
+        self.timers.clear()
     }
 }
 
