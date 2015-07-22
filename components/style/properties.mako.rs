@@ -22,6 +22,7 @@ use cssparser::{Parser, Color, RGBA, AtRuleParser, DeclarationParser,
 use fnv::FnvHasher;
 use euclid::SideOffsets2D;
 use euclid::size::Size2D;
+use string_cache::Atom;
 
 use values::specified::{Length, BorderStyle};
 use values::computed::{self, ToComputedValue};
@@ -5223,6 +5224,7 @@ fn deduplicate_property_declarations(declarations: Vec<PropertyDeclaration>)
                                      -> Vec<PropertyDeclaration> {
     let mut deduplicated = vec![];
     let mut seen = PropertyBitField::new();
+    let mut seen_custom = Vec::new();
     for declaration in declarations.into_iter().rev() {
         match declaration {
             % for property in LONGHANDS:
@@ -5237,6 +5239,12 @@ fn deduplicate_property_declarations(declarations: Vec<PropertyDeclaration>)
                     % endif
                 },
             % endfor
+            PropertyDeclaration::Custom(ref name, _) => {
+                if seen_custom.contains(name) {
+                    continue
+                }
+                seen_custom.push(name.clone())
+            }
         }
         deduplicated.push(declaration)
     }
@@ -5287,6 +5295,8 @@ pub enum PropertyDeclaration {
     % for property in LONGHANDS:
         ${property.camel_case}(DeclaredValue<longhands::${property.ident}::SpecifiedValue>),
     % endfor
+    /// Name (atom) does not include the `--` prefix.
+    Custom(Atom, ::custom_properties::Value),
 }
 
 
@@ -5337,6 +5347,15 @@ impl PropertyDeclaration {
 
     pub fn parse(name: &str, context: &ParserContext, input: &mut Parser,
                  result_list: &mut Vec<PropertyDeclaration>) -> PropertyDeclarationParseResult {
+        if name.starts_with("--") {
+            if let Ok(value) = ::custom_properties::parse(input) {
+                let name = Atom::from_slice(&name[2..]);
+                result_list.push(PropertyDeclaration::Custom(name, value));
+                return PropertyDeclarationParseResult::ValidOrIgnoredDeclaration;
+            } else {
+                return PropertyDeclarationParseResult::InvalidValue;
+            }
+        }
         match_ignore_ascii_case! { name,
             % for property in LONGHANDS:
                 % if property.derived_from is None:
@@ -5444,6 +5463,7 @@ pub struct ComputedValues {
     % for style_struct in STYLE_STRUCTS:
         ${style_struct.ident}: Arc<style_structs::${style_struct.name}>,
     % endfor
+    custom_properties: Option<Arc<::custom_properties::Map>>,
     shareable: bool,
     pub writing_mode: WritingMode,
     pub root_font_size: Au,
@@ -5651,6 +5671,7 @@ lazy_static! {
                 % endif
             }),
         % endfor
+        custom_properties: None,
         shareable: true,
         writing_mode: WritingMode::empty(),
         root_font_size: longhands::font_size::get_initial_value(),
@@ -5674,6 +5695,7 @@ fn cascade_with_cached_declarations(
             let mut style_${style_struct.ident} = cached_style.${style_struct.ident}.clone();
         % endif
     % endfor
+    let mut custom_properties = None;
 
     let mut seen = PropertyBitField::new();
     // Declaration blocks are stored in increasing precedence order,
@@ -5735,6 +5757,10 @@ fn cascade_with_cached_declarations(
                         % endif
                     % endfor
                 % endfor
+                PropertyDeclaration::Custom(ref name, ref value) => {
+                    ::custom_properties::cascade(
+                        &mut custom_properties, &parent_style.custom_properties, name, value)
+                }
             }
         }
     }
@@ -5749,6 +5775,8 @@ fn cascade_with_cached_declarations(
         % for style_struct in STYLE_STRUCTS:
             ${style_struct.ident}: style_${style_struct.ident},
         % endfor
+        custom_properties: custom_properties
+            .map(Arc::new).or_else(|| parent_style.custom_properties.clone()),
         shareable: shareable,
         root_font_size: parent_style.root_font_size,
     }
@@ -5811,7 +5839,6 @@ pub fn cascade(viewport_size: Size2D<Au>,
         Some(parent_style) => (false, parent_style),
         None => (true, initial_values),
     };
-
     let mut context = {
         let inherited_font_style = inherited_style.get_font();
         computed::Context {
@@ -5950,12 +5977,14 @@ pub fn cascade(viewport_size: Size2D<Au>,
                 % endif
                 .${style_struct.ident}.clone(),
         % endfor
+        custom_properties: None,
         shareable: false,
         writing_mode: WritingMode::empty(),
         root_font_size: context.root_font_size,
     };
     let mut cacheable = true;
     let mut seen = PropertyBitField::new();
+    let mut custom_properties = None;
     // Declaration blocks are stored in increasing precedence order, we want them in decreasing
     // order here.
     //
@@ -5966,15 +5995,23 @@ pub fn cascade(viewport_size: Size2D<Au>,
         for sub_list in applicable_declarations.iter().rev() {
             // Declarations are already stored in reverse order.
             for declaration in sub_list.declarations.iter() {
-                let discriminant = unsafe {
-                    intrinsics::discriminant_value(declaration) as usize
-                };
-                (cascade_property[discriminant].unwrap())(declaration,
-                                                          &mut style,
-                                                          inherited_style,
-                                                          &context,
-                                                          &mut seen,
-                                                          &mut cacheable);
+                match *declaration {
+                    PropertyDeclaration::Custom(ref name, ref value) => {
+                        ::custom_properties::cascade(
+                            &mut custom_properties, &inherited_style.custom_properties, name, value)
+                    }
+                    _ => {
+                        let discriminant = unsafe {
+                            intrinsics::discriminant_value(declaration) as usize
+                        };
+                        (cascade_property[discriminant].unwrap())(declaration,
+                                                                  &mut style,
+                                                                  inherited_style,
+                                                                  &context,
+                                                                  &mut seen,
+                                                                  &mut cacheable);
+                    }
+                }
             }
         }
     });
@@ -6016,6 +6053,8 @@ pub fn cascade(viewport_size: Size2D<Au>,
         % for style_struct in STYLE_STRUCTS:
             ${style_struct.ident}: style.${style_struct.ident},
         % endfor
+        custom_properties: custom_properties
+            .map(Arc::new).or_else(|| inherited_style.custom_properties.clone()),
         shareable: shareable,
         root_font_size: context.root_font_size,
     }, cacheable)
@@ -6038,6 +6077,7 @@ pub fn cascade_anonymous(parent_style: &ComputedValues) -> ComputedValues {
                 % endif
                 .${style_struct.ident}.clone(),
         % endfor
+        custom_properties: parent_style.custom_properties.clone(),
         shareable: false,
         writing_mode: parent_style.writing_mode,
         root_font_size: parent_style.root_font_size,
