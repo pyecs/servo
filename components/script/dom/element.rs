@@ -66,7 +66,7 @@ use devtools_traits::AttrInfo;
 use smallvec::VecLike;
 use style::legacy::{UnsignedIntegerAttribute, from_declaration};
 use style::properties::{PropertyDeclarationBlock, PropertyDeclaration, parse_style_attribute};
-use style::properties::DeclaredValue::SpecifiedValue;
+use style::properties::DeclaredValue;
 use style::properties::longhands::{self, border_spacing, height};
 use style::values::CSSFloat;
 use style::values::specified::{self, CSSColor, CSSRGBA};
@@ -274,7 +274,7 @@ impl RawLayoutElementHelpers for Element {
 
         if let Some(color) = bgcolor {
             hints.push(from_declaration(
-                PropertyDeclaration::BackgroundColor(SpecifiedValue(
+                PropertyDeclaration::BackgroundColor(DeclaredValue::Value(
                     CSSColor { parsed: Color::RGBA(color), authored: None }))));
         }
 
@@ -287,7 +287,7 @@ impl RawLayoutElementHelpers for Element {
 
         if let Some(color) = color {
             hints.push(from_declaration(
-                PropertyDeclaration::Color(SpecifiedValue(CSSRGBA {
+                PropertyDeclaration::Color(DeclaredValue::Value(CSSRGBA {
                     parsed: color,
                     authored: None,
                 }))));
@@ -303,7 +303,7 @@ impl RawLayoutElementHelpers for Element {
         if let Some(cellspacing) = cellspacing {
             let width_value = specified::Length::Absolute(Au::from_px(cellspacing as i32));
             hints.push(from_declaration(
-                PropertyDeclaration::BorderSpacing(SpecifiedValue(
+                PropertyDeclaration::BorderSpacing(DeclaredValue::Value(
                     border_spacing::SpecifiedValue {
                         horizontal: width_value,
                         vertical: width_value,
@@ -333,7 +333,7 @@ impl RawLayoutElementHelpers for Element {
             let value = specified::Length::ServoCharacterWidth(
                 specified::CharacterWidth(size));
             hints.push(from_declaration(
-                PropertyDeclaration::Width(SpecifiedValue(
+                PropertyDeclaration::Width(DeclaredValue::Value(
                     specified::LengthOrPercentageOrAuto::Length(value)))));
         }
 
@@ -356,13 +356,13 @@ impl RawLayoutElementHelpers for Element {
             LengthOrPercentageOrAuto::Percentage(percentage) => {
                 let width_value = specified::LengthOrPercentageOrAuto::Percentage(percentage);
                 hints.push(from_declaration(
-                    PropertyDeclaration::Width(SpecifiedValue(width_value))));
+                    PropertyDeclaration::Width(DeclaredValue::Value(width_value))));
             }
             LengthOrPercentageOrAuto::Length(length) => {
                 let width_value = specified::LengthOrPercentageOrAuto::Length(
                     specified::Length::Absolute(length));
                 hints.push(from_declaration(
-                    PropertyDeclaration::Width(SpecifiedValue(width_value))));
+                    PropertyDeclaration::Width(DeclaredValue::Value(width_value))));
             }
         }
 
@@ -378,13 +378,13 @@ impl RawLayoutElementHelpers for Element {
             LengthOrPercentageOrAuto::Auto => {}
             LengthOrPercentageOrAuto::Percentage(percentage) => {
                 let width_value = specified::LengthOrPercentageOrAuto::Percentage(percentage);
-                hints.push(from_declaration(PropertyDeclaration::Height(SpecifiedValue(
+                hints.push(from_declaration(PropertyDeclaration::Height(DeclaredValue::Value(
                                 height::SpecifiedValue(width_value)))));
             }
             LengthOrPercentageOrAuto::Length(length) => {
                 let width_value = specified::LengthOrPercentageOrAuto::Length(
                     specified::Length::Absolute(length));
-                hints.push(from_declaration(PropertyDeclaration::Height(SpecifiedValue(
+                hints.push(from_declaration(PropertyDeclaration::Height(DeclaredValue::Value(
                                 height::SpecifiedValue(width_value)))));
             }
         }
@@ -408,7 +408,7 @@ impl RawLayoutElementHelpers for Element {
             // https://html.spec.whatwg.org/multipage/#textarea-effective-width
             let value = specified::Length::ServoCharacterWidth(specified::CharacterWidth(cols));
             hints.push(from_declaration(
-                PropertyDeclaration::Width(SpecifiedValue(
+                PropertyDeclaration::Width(DeclaredValue::Value(
                     specified::LengthOrPercentageOrAuto::Length(value)))));
         }
 
@@ -429,7 +429,7 @@ impl RawLayoutElementHelpers for Element {
             // https://html.spec.whatwg.org/multipage/#textarea-effective-height
             let value = specified::Length::FontRelative(specified::FontRelativeLength::Em(rows as CSSFloat));
             hints.push(from_declaration(
-                PropertyDeclaration::Height(SpecifiedValue(
+                PropertyDeclaration::Height(DeclaredValue::Value(
                     longhands::height::SpecifiedValue(
                         specified::LengthOrPercentageOrAuto::Length(value))))));
         }
@@ -445,16 +445,16 @@ impl RawLayoutElementHelpers for Element {
         if let Some(border) = border {
             let width_value = specified::Length::Absolute(Au::from_px(border as i32));
             hints.push(from_declaration(
-                PropertyDeclaration::BorderTopWidth(SpecifiedValue(
+                PropertyDeclaration::BorderTopWidth(DeclaredValue::Value(
                     longhands::border_top_width::SpecifiedValue(width_value)))));
             hints.push(from_declaration(
-                PropertyDeclaration::BorderLeftWidth(SpecifiedValue(
+                PropertyDeclaration::BorderLeftWidth(DeclaredValue::Value(
                     longhands::border_left_width::SpecifiedValue(width_value)))));
             hints.push(from_declaration(
-                PropertyDeclaration::BorderBottomWidth(SpecifiedValue(
+                PropertyDeclaration::BorderBottomWidth(DeclaredValue::Value(
                     longhands::border_bottom_width::SpecifiedValue(width_value)))));
             hints.push(from_declaration(
-                PropertyDeclaration::BorderRightWidth(SpecifiedValue(
+                PropertyDeclaration::BorderRightWidth(DeclaredValue::Value(
                     longhands::border_right_width::SpecifiedValue(width_value)))));
         }
     }
