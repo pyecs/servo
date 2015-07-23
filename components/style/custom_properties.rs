@@ -158,66 +158,58 @@ pub fn cascade<'a>(custom_properties: &mut Option<HashMap<&'a Atom, BorrowedValu
 pub fn finish_cascade(custom_properties: Option<HashMap<&Atom, BorrowedValue>>,
                       inherited_custom_properties: &Option<Arc<HashMap<Atom, String>>>)
                       -> Option<Arc<HashMap<Atom, String>>> {
-    if let Some(mut map) = custom_properties {
-        remove_cycles(&mut map);
-        Some(Arc::new(substitute_all(map)))
+    if let Some(custom_properties) = custom_properties {
+        let mut invalid = HashSet::new();
+        find_cycles(&custom_properties, &mut invalid);
+        let mut substituted_map = HashMap::new();
+        for (&name, value) in &custom_properties {
+            // If this value is invalid at computed time it won’t be inserted in substituted_map.
+            // Nothing else to do.
+            let _ = substitute_one(
+                name, value, &custom_properties, None, &mut substituted_map, &mut invalid);
+        }
+        Some(Arc::new(substituted_map))
     } else {
+        // At most this clones an `Arc` (i.e. increments a reference count).
+        // Making this cheap is why we use `Arc` at all.
         inherited_custom_properties.clone()
     }
 }
 
 /// https://drafts.csswg.org/css-variables/#cycles
-fn remove_cycles(map: &mut HashMap<&Atom, BorrowedValue>) {
-    let mut to_remove = HashSet::new();
-    {
-        let mut visited = HashSet::new();
-        let mut stack = Vec::new();
-        for name in map.keys() {
-            walk(map, name, &mut stack, &mut visited, &mut to_remove);
+fn find_cycles(map: &HashMap<&Atom, BorrowedValue>, invalid: &mut HashSet<Atom>) {
+    let mut visited = HashSet::new();
+    let mut stack = Vec::new();
+    for name in map.keys() {
+        walk(map, name, &mut stack, &mut visited, invalid);
 
-            fn walk<'a>(map: &HashMap<&'a Atom, BorrowedValue<'a>>,
-                        name: &'a Atom,
-                        stack: &mut Vec<&'a Atom>,
-                        visited: &mut HashSet<&'a Atom>,
-                        to_remove: &mut HashSet<Atom>) {
-                let was_not_already_present = visited.insert(name);
-                if !was_not_already_present {
-                    return
-                }
-                if let Some(value) = map.get(name) {
-                    if let Some(references) = value.references {
-                        stack.push(name);
-                        for next in references {
-                            if let Some(position) = stack.position_elem(&next) {
-                                // Found a cycle
-                                for in_cycle in &stack[position..] {
-                                    to_remove.insert((**in_cycle).clone());
-                                }
-                            } else {
-                                walk(map, next, stack, visited, to_remove);
+        fn walk<'a>(map: &HashMap<&'a Atom, BorrowedValue<'a>>,
+                    name: &'a Atom,
+                    stack: &mut Vec<&'a Atom>,
+                    visited: &mut HashSet<&'a Atom>,
+                    invalid: &mut HashSet<Atom>) {
+            let was_not_already_present = visited.insert(name);
+            if !was_not_already_present {
+                return
+            }
+            if let Some(value) = map.get(name) {
+                if let Some(references) = value.references {
+                    stack.push(name);
+                    for next in references {
+                        if let Some(position) = stack.position_elem(&next) {
+                            // Found a cycle
+                            for in_cycle in &stack[position..] {
+                                invalid.insert((**in_cycle).clone());
                             }
+                        } else {
+                            walk(map, next, stack, visited, invalid);
                         }
-                        stack.pop();
                     }
+                    stack.pop();
                 }
             }
         }
     }
-    for name in &to_remove {
-        map.remove(name);
-    }
-}
-
-fn substitute_all(custom_properties: HashMap<&Atom, BorrowedValue>) -> HashMap<Atom, String> {
-    let mut substituted_map = HashMap::new();
-    let mut invalid = HashSet::new();
-    for (&name, value) in &custom_properties {
-        // If this value is invalid at computed time it won’t be inserted in substituted_map.
-        // Nothing else to do.
-        let _ = substitute_one(
-            name, value, &custom_properties, None, &mut substituted_map, &mut invalid);
-    }
-    substituted_map
 }
 
 fn substitute_one(name: &Atom,
